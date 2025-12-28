@@ -1,0 +1,11 @@
+{
+  "domain": "multicraft",
+  "name": "Multicraft",
+  "codeowners": ["@fre69"],
+  "config_flow": true,
+  "documentation": "https://github.com/fre69/homeassistant-multicraft",
+  "issue_tracker": "https://github.com/fre69/homeassistant-multicraft/issues",
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": []
+}
