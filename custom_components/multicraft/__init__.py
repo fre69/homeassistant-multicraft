@@ -9,6 +9,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from datetime import timedelta
@@ -170,7 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.warning("Could not get connection info for server %s: %s", server_id, err)
 
     except Exception as err:
-        _LOGGER.warning("Could not fetch server info: %s", err)
+        raise ConfigEntryNotReady(f"Could not connect to Multicraft API: {err}") from err
 
     async def async_update_data():
         """Fetch data from Multicraft API for all servers."""
