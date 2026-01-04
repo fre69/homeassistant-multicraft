@@ -184,11 +184,29 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
             session,
         )
 
+        # Try to get servers from cache first (from coordinator)
+        cached_servers = None
+        if DOMAIN in self.hass.data and self.config_entry.entry_id in self.hass.data[DOMAIN]:
+            entry_data = self.hass.data[DOMAIN][self.config_entry.entry_id]
+            servers_info = entry_data.get("servers_info", {})
+            if servers_info:
+                cached_servers = [
+                    {"id": int(sid), "name": name, "status": "cached"}
+                    for sid, name in servers_info.items()
+                ]
         try:
             self._servers = await api.get_all_servers_info()
         except Exception as err:
-            _LOGGER.error("Error fetching servers: %s", err)
-            errors["base"] = "cannot_connect"
+            _LOGGER.warning("Error fetching servers from API: %s, using cached data", err)
+            if cached_servers:
+                self._servers = cached_servers
+            else:
+                self._servers = [
+                    {"id": int(sid), "name": f"Server {sid}", "status": "unknown"}
+                    for sid in current_server_ids
+                ]
+                if not self._servers:
+                    errors["base"] = "cannot_connect"
 
         if user_input is not None and not errors:
             selected_ids = user_input.get(CONF_SERVER_IDS, [])
