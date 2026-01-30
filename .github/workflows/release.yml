@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Validate HACS
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Validate Hassfest
+        uses: home-assistant/actions/hassfest@master
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### HACS (Recommandé)
+            1. Ouvrez HACS dans Home Assistant
+            2. Recherchez "Multicraft"
+            3. Cliquez sur "Télécharger"
+            4. Redémarrez Home Assistant
+
+            ### Manuel
+            1. Téléchargez le fichier zip ci-dessous
+            2. Extrayez dans `config/custom_components/multicraft/`
+            3. Redémarrez Home Assistant
+
+            ---
+            Voir le [CHANGELOG](https://github.com/fre69/homeassistant-multicraft/blob/main/CHANGELOG.md) pour les détails.
