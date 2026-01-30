@@ -6,7 +6,7 @@ Quand l'utilisateur demande une nouvelle release :
 
 1. **Mettre à jour la version** dans `custom_components/multicraft/manifest.json`
 
-2. **Mettre à jour le CHANGELOG.md** avec les changements de la nouvelle version
+2. **Mettre à jour le CHANGELOG.md** avec les changements de la nouvelle version (format bilingue EN/FR)
 
 3. **Créer le commit** :
    ```bash
