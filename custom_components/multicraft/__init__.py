@@ -14,10 +14,31 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from datetime import timedelta
 
+from urllib.parse import urlparse
+
 from .api import MulticraftAPI
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL, CONF_SERVER_IDS, CONF_SERVER_ID
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_valid_ip(ip: str) -> bool:
+    """Check if IP is valid and routable (not 0.0.0.0 or empty)."""
+    if not ip:
+        return False
+    # 0.0.0.0 means "listen on all interfaces" - not routable
+    if ip == "0.0.0.0":
+        return False
+    return True
+
+
+def _extract_host_from_url(url: str) -> str:
+    """Extract host/IP from a URL."""
+    try:
+        parsed = urlparse(url)
+        return parsed.hostname or ""
+    except Exception:
+        return ""
 
 PLATFORMS = ["switch", "sensor"]
 
@@ -25,7 +46,9 @@ CONF_SCAN_INTERVAL = "scan_interval"
 
 
 async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0) -> dict[str, Any]:
-    """Ping a Minecraft server to get version and latency."""
+    """Ping a Minecraft server to get version and latency using the Minecraft protocol."""
+    import json
+
     try:
         start_time = time.time()
 
@@ -36,7 +59,7 @@ async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0
         )
 
         # Build handshake packet
-        protocol_version = 47  # Minecraft 1.8+
+        protocol_version = 767  # Minecraft 1.21+ (use modern protocol)
         host_bytes = host.encode('utf-8')
 
         # Handshake data
@@ -51,19 +74,43 @@ async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0
         # Send handshake packet
         writer.write(_encode_varint(len(handshake_data)) + handshake_data)
 
-        # Send status request
+        # Send status request (packet ID 0x00, no data)
         writer.write(b'\x01\x00')
         await writer.drain()
 
-        # Read response
-        _read_varint(reader)  # Packet length
-        await asyncio.wait_for(reader.read(1), timeout=timeout)  # Packet ID
+        # Read response packet
+        # First: read packet length (VarInt)
+        packet_length = await _async_read_varint(reader, timeout)
+        _LOGGER.debug("Received packet length: %s", packet_length)
 
-        # Read JSON string length
+        # Read packet ID (VarInt, should be 0x00 for status response)
+        packet_id = await _async_read_varint(reader, timeout)
+        _LOGGER.debug("Received packet ID: %s", packet_id)
+
+        if packet_id != 0:
+            _LOGGER.warning("Unexpected packet ID: %s (expected 0)", packet_id)
+
+        # Read JSON string length (VarInt)
         json_length = await _async_read_varint(reader, timeout)
+        _LOGGER.debug("JSON length: %s", json_length)
+
+        # Sanity check on json_length
+        if json_length <= 0 or json_length > 100000:
+            _LOGGER.warning("Invalid JSON length: %s", json_length)
+            writer.close()
+            await writer.wait_closed()
+            return {'latency': None, 'version': None, 'online': False}
 
         # Read JSON data
-        json_data = await asyncio.wait_for(reader.read(json_length), timeout=timeout)
+        json_data = b''
+        while len(json_data) < json_length:
+            chunk = await asyncio.wait_for(
+                reader.read(json_length - len(json_data)),
+                timeout=timeout
+            )
+            if not chunk:
+                break
+            json_data += chunk
 
         writer.close()
         await writer.wait_closed()
@@ -71,16 +118,17 @@ async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0
         latency = int((time.time() - start_time) * 1000)
 
         # Parse JSON response
-        import json
         try:
             response = json.loads(json_data.decode('utf-8'))
             version = response.get('version', {}).get('name', 'Unknown')
+            _LOGGER.debug("Minecraft server response: version=%s", version)
             return {
                 'latency': latency,
                 'version': version,
                 'online': True,
             }
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            _LOGGER.debug("Could not parse server response: %s, raw data: %s", err, json_data[:100])
             return {
                 'latency': latency,
                 'version': 'Unknown',
@@ -88,7 +136,7 @@ async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0
             }
 
     except Exception as err:
-        _LOGGER.debug("Could not ping Minecraft server %s:%s: %s", host, port, err)
+        _LOGGER.warning("Could not ping Minecraft server %s:%s: %s", host, port, err)
         return {
             'latency': None,
             'version': None,
@@ -157,16 +205,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             server_id = str(server["id"])
             servers_info[server_id] = server["name"]
 
+        # Extract fallback IP from API URL (useful when server reports 0.0.0.0)
+        fallback_ip = _extract_host_from_url(api_url)
+        _LOGGER.debug("Fallback IP from API URL: %s", fallback_ip)
+
         # Get connection info (IP/port) for each selected server
         for server_id in server_ids:
             try:
                 server_details = await api.get_server(int(server_id))
+                _LOGGER.debug("Server %s details: %s", server_id, server_details)
                 if server_details.get("success"):
                     server_data = server_details.get("data", {}).get("Server", {})
-                    ip = server_data.get("ip", "")
-                    port = server_data.get("port", 25565)
+                    _LOGGER.debug("Server %s data keys: %s", server_id, list(server_data.keys()))
+
+                    # Try multiple possible field names for IP
+                    raw_ip = (
+                        server_data.get("ip") or
+                        server_data.get("daemon_ip") or
+                        server_data.get("daemonIp") or
+                        server_data.get("server_ip") or
+                        server_data.get("serverIp") or
+                        ""
+                    )
+
+                    # Use fallback IP if the server reports 0.0.0.0 or empty
+                    if _is_valid_ip(raw_ip):
+                        ip = raw_ip
+                    elif fallback_ip:
+                        _LOGGER.info(
+                            "Server %s reports IP '%s', using API host '%s' instead",
+                            server_id, raw_ip, fallback_ip
+                        )
+                        ip = fallback_ip
+                    else:
+                        ip = ""
+
+                    # Try multiple possible field names for port
+                    port = (
+                        server_data.get("port") or
+                        server_data.get("server_port") or
+                        server_data.get("serverPort") or
+                        25565
+                    )
+
+                    _LOGGER.debug("Server %s - IP: %s, Port: %s", server_id, ip, port)
+
                     if ip:
                         servers_connection[server_id] = {"ip": ip, "port": int(port)}
+                    else:
+                        _LOGGER.warning("No IP found for server %s. Available fields: %s", server_id, server_data)
             except Exception as err:
                 _LOGGER.warning("Could not get connection info for server %s: %s", server_id, err)
 
@@ -185,10 +272,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # If server is online and we have connection info, ping for latency/version
                 if server_data.get("status") == "online" and server_id in servers_connection:
                     conn = servers_connection[server_id]
+                    _LOGGER.debug("Pinging Minecraft server %s at %s:%s", server_id, conn["ip"], conn["port"])
                     ping_result = await async_ping_minecraft_server(conn["ip"], conn["port"])
+                    _LOGGER.debug("Ping result for server %s: %s", server_id, ping_result)
                     server_data["latency"] = ping_result.get("latency")
                     server_data["version"] = ping_result.get("version")
                 else:
+                    _LOGGER.debug(
+                        "Skipping ping for server %s: status=%s, has_connection=%s",
+                        server_id, server_data.get("status"), server_id in servers_connection
+                    )
                     server_data["latency"] = None
                     server_data["version"] = None
 

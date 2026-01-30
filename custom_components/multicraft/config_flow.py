@@ -162,7 +162,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # Note: self.config_entry is automatically set by the parent class
         self._servers: list[dict[str, Any]] = []
 
     async def async_step_init(
@@ -170,47 +170,77 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         errors = {}
+        fallback_servers = []
 
+        # Get current values with safe defaults
         current_server_ids = self.config_entry.data.get(CONF_SERVER_IDS, [])
         current_scan_interval = self.config_entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
         )
 
-        session = async_get_clientsession(self.hass)
-        api = MulticraftAPI(
-            self.config_entry.data[CONF_API_URL],
-            self.config_entry.data[CONF_USERNAME],
-            self.config_entry.data[CONF_API_KEY],
-            session,
-        )
-
-        # Try to get servers from cache first (from coordinator)
-        cached_servers = None
-        if DOMAIN in self.hass.data and self.config_entry.entry_id in self.hass.data[DOMAIN]:
-            entry_data = self.hass.data[DOMAIN][self.config_entry.entry_id]
-            servers_info = entry_data.get("servers_info", {})
-            if servers_info:
-                cached_servers = [
-                    {"id": int(sid), "name": name, "status": "cached"}
-                    for sid, name in servers_info.items()
-                ]
         try:
-            self._servers = await api.get_all_servers_info()
-        except Exception as err:
-            _LOGGER.warning("Error fetching servers from API: %s, using cached data", err)
+
+            _LOGGER.debug("Options flow init: server_ids=%s, scan_interval=%s",
+                         current_server_ids, current_scan_interval)
+
+            # Build fallback list from current config (always available)
+            for sid in current_server_ids:
+                try:
+                    fallback_servers.append({
+                        "id": int(sid),
+                        "name": f"Server {sid}",
+                        "status": "unknown"
+                    })
+                except (ValueError, TypeError) as e:
+                    _LOGGER.warning("Invalid server ID %s: %s", sid, e)
+
+            # Try to get servers from cache first (from coordinator) - this avoids API calls
+            cached_servers = []
+            if DOMAIN in self.hass.data and self.config_entry.entry_id in self.hass.data[DOMAIN]:
+                entry_data = self.hass.data[DOMAIN][self.config_entry.entry_id]
+                servers_info = entry_data.get("servers_info", {})
+                _LOGGER.debug("Found cached servers_info: %s", servers_info)
+                if servers_info:
+                    for sid, name in servers_info.items():
+                        try:
+                            cached_servers.append({
+                                "id": int(sid),
+                                "name": name,
+                                "status": "en cache"
+                            })
+                        except (ValueError, TypeError) as e:
+                            _LOGGER.warning("Invalid cached server ID %s: %s", sid, e)
+
+            # Use cached servers if available (preferred - no API call needed)
             if cached_servers:
                 self._servers = cached_servers
+                _LOGGER.debug("Using cached server list for options flow: %s", cached_servers)
+            elif fallback_servers:
+                # Use fallback without calling API
+                self._servers = fallback_servers
+                _LOGGER.debug("Using fallback server list for options flow: %s", fallback_servers)
             else:
-                self._servers = [
-                    {"id": int(sid), "name": f"Server {sid}", "status": "unknown"}
-                    for sid in current_server_ids
-                ]
-                if not self._servers:
-                    errors["base"] = "cannot_connect"
+                # No servers at all - show empty form
+                self._servers = []
+                _LOGGER.warning("No servers available for options flow")
+
+        except Exception as err:
+            _LOGGER.exception("Error in options flow setup: %s", err)
+            self._servers = fallback_servers if fallback_servers else []
+            if not self._servers:
+                errors["base"] = "cannot_connect"
+
+        # Ensure we always have at least the currently configured servers
+        if not self._servers and fallback_servers:
+            self._servers = fallback_servers
 
         if user_input is not None and not errors:
-            selected_ids = user_input.get(CONF_SERVER_IDS, [])
+            selected_ids = user_input.get(CONF_SERVER_IDS)
             scan_interval = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+
+            # If server selection is not in form (API was unreachable), keep current selection
+            if selected_ids is None:
+                selected_ids = current_server_ids
 
             if not selected_ids:
                 errors["base"] = "no_server_selected"
@@ -233,30 +263,49 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
             for server in self._servers
         ]
 
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_SERVER_IDS, default=current_server_ids
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=server_options,
-                        multiple=True,
-                        mode=SelectSelectorMode.LIST,
-                    )
-                ),
-                vol.Required(
-                    CONF_SCAN_INTERVAL, default=current_scan_interval
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=10,
-                        max=300,
-                        step=5,
-                        mode=NumberSelectorMode.SLIDER,
-                        unit_of_measurement="secondes",
-                    )
-                ),
-            }
-        )
+        # Build schema based on whether we have server options
+        if server_options:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SERVER_IDS, default=current_server_ids
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=server_options,
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_SCAN_INTERVAL, default=current_scan_interval
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=10,
+                            max=300,
+                            step=5,
+                            mode=NumberSelectorMode.SLIDER,
+                            unit_of_measurement="secondes",
+                        )
+                    ),
+                }
+            )
+        else:
+            # No servers available - only show scan interval option
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SCAN_INTERVAL, default=current_scan_interval
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=10,
+                            max=300,
+                            step=5,
+                            mode=NumberSelectorMode.SLIDER,
+                            unit_of_measurement="secondes",
+                        )
+                    ),
+                }
+            )
 
         return self.async_show_form(
             step_id="init",
