@@ -377,30 +377,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register download_backup service (only once)
     if not hass.services.has_service(DOMAIN, "download_backup"):
 
-        SERVICE_DOWNLOAD_BACKUP_SCHEMA = vol.Schema(
-            {
-                vol.Optional("destination_path", default="/media/multicraft_backups/"): cv.string,
-            },
-            extra=vol.ALLOW_EXTRA,
-        )
+        SERVICE_DOWNLOAD_BACKUP_SCHEMA = vol.Schema({
+            vol.Required("device_id"): cv.string,
+            vol.Optional("destination_path", default="/media/multicraft_backups/"): cv.string,
+        })
 
         async def handle_download_backup(call):
             """Handle the download_backup service call."""
             destination_path = call.data.get("destination_path", "/media/multicraft_backups/")
 
-            # Resolve device target to server_id and entry_id
-            device_ids = call.data.get("device_id", [])
-            if isinstance(device_ids, str):
-                device_ids = [device_ids]
-
-            if not device_ids:
+            # Resolve device_id to server_id and entry_id
+            device_id = call.data.get("device_id")
+            if not device_id:
                 raise HomeAssistantError(
                     "No target device specified. Please select a Minecraft server device."
                 )
 
-            # Use the first targeted device
             device_registry = dr.async_get(hass)
-            device = device_registry.async_get(device_ids[0])
+            device = device_registry.async_get(device_id)
             if not device:
                 raise HomeAssistantError("Target device not found")
 

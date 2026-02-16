@@ -1,10 +1,14 @@
 download_backup:
   name: Download Backup
   description: Start a server backup and download it via FTP to local storage.
-  target:
-    device:
-      integration: multicraft
   fields:
+    device_id:
+      name: Server
+      description: The Minecraft server to backup.
+      required: true
+      selector:
+        device:
+          integration: multicraft
     destination_path:
       name: Destination Path
       description: Local path where the backup file will be saved.
