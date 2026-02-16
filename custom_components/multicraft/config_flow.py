@@ -17,10 +17,13 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .api import MulticraftAPI
-from .const import DOMAIN, CONF_API_URL, CONF_USERNAME, CONF_API_KEY, CONF_SERVER_IDS, DEFAULT_SCAN_INTERVAL
+from .const import DOMAIN, CONF_API_URL, CONF_USERNAME, CONF_API_KEY, CONF_SERVER_IDS, DEFAULT_SCAN_INTERVAL, CONF_FTP_PASSWORD
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_API_URL): str,
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_API_KEY): str,
+        vol.Optional(CONF_FTP_PASSWORD, default=""): str,
     }
 )
 
@@ -39,13 +43,14 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Multicraft."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self):
         """Initialize the config flow."""
         self._api_url: str | None = None
         self._username: str | None = None
         self._api_key: str | None = None
+        self._ftp_password: str = ""
         self._servers: list[dict[str, Any]] = []
 
     @staticmethod
@@ -64,6 +69,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._api_url = user_input[CONF_API_URL]
             self._username = user_input[CONF_USERNAME]
             self._api_key = user_input[CONF_API_KEY]
+            self._ftp_password = user_input.get(CONF_FTP_PASSWORD, "")
 
             # Test connection and get server list
             session = async_get_clientsession(self.hass)
@@ -127,6 +133,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME: self._username,
                         CONF_API_KEY: self._api_key,
                         CONF_SERVER_IDS: selected_ids,
+                        CONF_FTP_PASSWORD: self._ftp_password,
                     },
                 )
 
@@ -177,6 +184,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
         current_scan_interval = self.config_entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
         )
+        current_ftp_password = self.config_entry.data.get(CONF_FTP_PASSWORD, "")
 
         try:
 
@@ -245,7 +253,12 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
             if not selected_ids:
                 errors["base"] = "no_server_selected"
             else:
-                new_data = {**self.config_entry.data, CONF_SERVER_IDS: selected_ids}
+                ftp_password = user_input.get(CONF_FTP_PASSWORD, current_ftp_password)
+                new_data = {
+                    **self.config_entry.data,
+                    CONF_SERVER_IDS: selected_ids,
+                    CONF_FTP_PASSWORD: ftp_password,
+                }
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=new_data
                 )
@@ -264,6 +277,16 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
         ]
 
         # Build schema based on whether we have server options
+        ftp_password_field = {
+            vol.Optional(
+                CONF_FTP_PASSWORD, default=current_ftp_password
+            ): TextSelector(
+                TextSelectorConfig(
+                    type=TextSelectorType.PASSWORD,
+                )
+            ),
+        }
+
         if server_options:
             schema = vol.Schema(
                 {
@@ -287,6 +310,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
                             unit_of_measurement="secondes",
                         )
                     ),
+                    **ftp_password_field,
                 }
             )
         else:
@@ -304,6 +328,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
                             unit_of_measurement="secondes",
                         )
                     ),
+                    **ftp_password_field,
                 }
             )
 

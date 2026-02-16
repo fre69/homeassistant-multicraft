@@ -155,6 +155,14 @@ class MulticraftAPI:
         """Restart a server."""
         return await self._call_api("restartServer", id=server_id)
 
+    async def start_server_backup(self, server_id: int) -> dict[str, Any]:
+        """Start a server backup."""
+        return await self._call_api("startServerBackup", id=server_id)
+
+    async def get_server_backup_status(self, server_id: int) -> dict[str, Any]:
+        """Get server backup status."""
+        return await self._call_api("getServerBackupStatus", id=server_id)
+
     async def get_server(self, server_id: int) -> dict[str, Any]:
         """Get server information."""
         return await self._call_api("getServer", id=server_id)

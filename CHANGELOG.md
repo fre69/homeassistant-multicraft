@@ -14,6 +14,23 @@ et ce projet adhère à [Semantic Versioning](https://semver.org/lang/fr/).
 
 ---
 
+## [1.1.0] - 2026-02-15
+
+### Added / Ajouté
+- Backup button entity to trigger server backups from Home Assistant
+- Backup status sensor with real-time progress tracking
+- `multicraft.download_backup` service for automated backup download via FTP
+- FTP password field in integration configuration (optional)
+- Events `multicraft_backup_completed` and `multicraft_backup_failed` for automations
+
+---
+
+- Bouton de sauvegarde pour déclencher les backups serveur depuis Home Assistant
+- Capteur d'état de sauvegarde avec suivi en temps réel
+- Service `multicraft.download_backup` pour le téléchargement automatisé des sauvegardes via FTP
+- Champ mot de passe FTP dans la configuration de l'intégration (optionnel)
+- Événements `multicraft_backup_completed` et `multicraft_backup_failed` pour les automatisations
+
 ## [1.0.1] - 2025-01-30
 
 ### Fixed / Corrigé
@@ -50,5 +67,6 @@ et ce projet adhère à [Semantic Versioning](https://semver.org/lang/fr/).
 - Support multilingue (Français/Anglais)
 - Documentation complète
 
+[1.1.0]: https://github.com/fre69/homeassistant-multicraft/releases/tag/v1.1.0
 [1.0.1]: https://github.com/fre69/homeassistant-multicraft/releases/tag/v1.0.1
 [1.0.0]: https://github.com/fre69/homeassistant-multicraft/releases/tag/v1.0.0

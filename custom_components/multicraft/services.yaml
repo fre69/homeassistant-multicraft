@@ -1,0 +1,15 @@
+download_backup:
+  name: Download Backup
+  description: Start a server backup and download it via FTP to local storage.
+  target:
+    device:
+      integration: multicraft
+  fields:
+    destination_path:
+      name: Destination Path
+      description: Local path where the backup file will be saved.
+      required: false
+      default: "/media/multicraft_backups/"
+      example: "/media/multicraft_backups/"
+      selector:
+        text:

@@ -58,6 +58,11 @@ SENSOR_DESCRIPTIONS = [
         translation_key="version",
         icon="mdi:information-outline",
     ),
+    SensorEntityDescription(
+        key="backup_status",
+        translation_key="backup_status",
+        icon="mdi:backup-restore",
+    ),
 ]
 
 
@@ -118,6 +123,7 @@ class MulticraftSensor(CoordinatorEntity, SensorEntity):
             "maxPlayers": "Joueurs max",
             "latency": "Latence",
             "version": "Version",
+            "backup_status": "Sauvegarde",
         }
         self._attr_name = name_map.get(description.key, description.key)
 
@@ -161,6 +167,16 @@ class MulticraftSensor(CoordinatorEntity, SensorEntity):
             }
             return status_map.get(value, value)
 
+        # Convert backup status to French
+        if self.entity_description.key == "backup_status":
+            backup_map = {
+                "idle": "Inactif",
+                "running": "En cours",
+                "completed": "Terminé",
+                "error": "Erreur",
+            }
+            return backup_map.get(value, value)
+
         # Convert numeric values to int if they are strings
         if self.entity_description.key in ("onlinePlayers", "maxPlayers", "latency"):
             try:
@@ -183,5 +199,12 @@ class MulticraftSensor(CoordinatorEntity, SensorEntity):
             server_data = self.coordinator.data.get(self._server_id, {})
             if "players" in server_data:
                 attrs["players"] = server_data.get("players", [])
+
+            # Add backup attributes for backup sensor
+            if self.entity_description.key == "backup_status":
+                attrs["backup_file"] = server_data.get("backup_file", "")
+                attrs["backup_ftp"] = server_data.get("backup_ftp", "")
+                attrs["backup_message"] = server_data.get("backup_message", "")
+                attrs["last_backup_time"] = server_data.get("backup_time", "")
 
         return attrs

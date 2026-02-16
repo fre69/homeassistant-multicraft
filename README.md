@@ -14,6 +14,9 @@ This integration allows you to control your Minecraft servers managed by Multicr
   - Server status (Online/Offline/Starting/Stopping)
   - Number of players online
   - Maximum players
+  - Backup status (Idle/Running/Completed/Error)
+- **Button**: Trigger a server backup
+- **Service**: `multicraft.download_backup` - Start a backup and download it via FTP
 - UI-based configuration
 - Multilingual support (English/French)
 
@@ -44,7 +47,8 @@ You will need:
   - For a remote server: `https://example.com/multicraft`
 - **Username**: Your Multicraft username
 - **API Key**: Your API key (generated in your Multicraft user profile)
-- **Server ID**: The numeric ID of your Minecraft server
+- **Server selection**: After connecting, you will choose which servers to monitor from a list
+- **FTP Password** (optional): Your Multicraft panel password, required for backup download functionality
 
 ### Local configuration example
 
@@ -77,8 +81,23 @@ Once configured, you will find:
   - `sensor.multicraft_server_X_status`
   - `sensor.multicraft_server_X_players_online`
   - `sensor.multicraft_server_X_max_players`
+  - `sensor.multicraft_server_X_backup_status`
+- A **button** to trigger a backup: `button.multicraft_server_X_backup`
 
 You can use these entities in your Home Assistant automations.
+
+### Backup service
+
+The `multicraft.download_backup` service starts a server backup, waits for completion, and downloads the backup file via FTP. It uses device targeting, so you can pick your server from a dropdown in the visual automation editor.
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `target` | Yes | - | The Minecraft server device to backup |
+| `destination_path` | No | `/media/multicraft_backups/` | Local path for the backup file |
+
+The service fires events for automation triggers:
+- `multicraft_backup_completed` with `server_id` and `file` data
+- `multicraft_backup_failed` with `server_id` and `error` data
 
 ## Automation examples
 
@@ -132,6 +151,31 @@ automation:
           message: "The Minecraft server is now online!"
 ```
 
+### Daily backup with notification
+
+```yaml
+automation:
+  - alias: "Daily Minecraft backup"
+    trigger:
+      - platform: time
+        at: "04:00:00"
+    action:
+      - service: multicraft.download_backup
+        target:
+          device_id: "your_device_id_here"
+        data:
+          destination_path: "/media/multicraft_backups/"
+
+  - alias: "Backup completion notification"
+    trigger:
+      - platform: event
+        event_type: multicraft_backup_completed
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          message: "Minecraft backup completed: {{ trigger.event.data.file }}"
+```
+
 ## Support
 
 - **Multicraft API Documentation**: https://www.multicraft.org/site/docs/api
@@ -154,6 +198,9 @@ Cette intégration permet de contrôler vos serveurs Minecraft gérés par Multi
   - Statut du serveur (En ligne/Hors ligne/Démarrage/Arrêt)
   - Nombre de joueurs en ligne
   - Nombre maximum de joueurs
+  - Statut de sauvegarde (Inactif/En cours/Terminé/Erreur)
+- **Bouton** : Déclencher une sauvegarde du serveur
+- **Service** : `multicraft.download_backup` - Lancer une sauvegarde et la télécharger via FTP
 - Configuration via l'interface utilisateur
 - Support multilingue (Français/Anglais)
 
@@ -184,7 +231,8 @@ Vous aurez besoin de :
   - Pour un serveur distant : `https://example.com/multicraft`
 - **Nom d'utilisateur** : Votre nom d'utilisateur Multicraft
 - **Clé API** : Votre clé API (générée dans le profil utilisateur de Multicraft)
-- **ID du serveur** : L'ID numérique de votre serveur Minecraft
+- **Sélection des serveurs** : Après connexion, vous choisirez les serveurs à surveiller dans une liste
+- **Mot de passe FTP** (optionnel) : Votre mot de passe du panel Multicraft, nécessaire pour le téléchargement des sauvegardes
 
 ### Exemple de configuration locale
 
@@ -217,8 +265,23 @@ Une fois configurée, vous trouverez :
   - `sensor.multicraft_server_X_status`
   - `sensor.multicraft_server_X_joueurs_en_ligne`
   - `sensor.multicraft_server_X_joueurs_maximum`
+  - `sensor.multicraft_server_X_backup_status`
+- Un **bouton** pour déclencher une sauvegarde : `button.multicraft_server_X_backup`
 
 Vous pouvez utiliser ces entités dans vos automatisations Home Assistant.
+
+### Service de sauvegarde
+
+Le service `multicraft.download_backup` lance une sauvegarde du serveur, attend la fin, et télécharge le fichier via FTP. Il utilise le ciblage par appareil, vous pouvez donc choisir votre serveur dans un menu déroulant dans l'éditeur visuel d'automatisation.
+
+| Paramètre | Requis | Défaut | Description |
+|-----------|--------|--------|-------------|
+| `target` | Oui | - | L'appareil du serveur Minecraft à sauvegarder |
+| `destination_path` | Non | `/media/multicraft_backups/` | Chemin local pour le fichier de sauvegarde |
+
+Le service déclenche des événements pour les automatisations :
+- `multicraft_backup_completed` avec les données `server_id` et `file`
+- `multicraft_backup_failed` avec les données `server_id` et `error`
 
 ## Exemples d'automatisations
 
@@ -270,6 +333,31 @@ automation:
       - service: notify.mobile_app_votre_telephone
         data:
           message: "Le serveur Minecraft est maintenant en ligne !"
+```
+
+### Sauvegarde quotidienne avec notification
+
+```yaml
+automation:
+  - alias: "Sauvegarde quotidienne Minecraft"
+    trigger:
+      - platform: time
+        at: "04:00:00"
+    action:
+      - service: multicraft.download_backup
+        target:
+          device_id: "votre_device_id_ici"
+        data:
+          destination_path: "/media/multicraft_backups/"
+
+  - alias: "Notification sauvegarde terminée"
+    trigger:
+      - platform: event
+        event_type: multicraft_backup_completed
+    action:
+      - service: notify.mobile_app_votre_telephone
+        data:
+          message: "Sauvegarde Minecraft terminée : {{ trigger.event.data.file }}"
 ```
 
 ## Support

@@ -10,3 +10,4 @@ CONF_SERVER_ID = "server_id"
 DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SERVER_IDS = "server_ids"
+CONF_FTP_PASSWORD = "ftp_password"
