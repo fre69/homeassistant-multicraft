@@ -92,7 +92,7 @@ The `multicraft.download_backup` service starts a server backup, waits for compl
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `target` | Yes | - | The Minecraft server device to backup |
+| `device_id` | Yes | - | The Minecraft server device to backup (selectable from dropdown) |
 | `destination_path` | No | `/media/multicraft_backups/` | Local path for the backup file |
 
 The service fires events for automation triggers:
@@ -161,9 +161,8 @@ automation:
         at: "04:00:00"
     action:
       - service: multicraft.download_backup
-        target:
-          device_id: "your_device_id_here"
         data:
+          device_id: "your_device_id_here"
           destination_path: "/media/multicraft_backups/"
 
   - alias: "Backup completion notification"
@@ -276,7 +275,7 @@ Le service `multicraft.download_backup` lance une sauvegarde du serveur, attend 
 
 | Paramètre | Requis | Défaut | Description |
 |-----------|--------|--------|-------------|
-| `target` | Oui | - | L'appareil du serveur Minecraft à sauvegarder |
+| `device_id` | Oui | - | L'appareil du serveur Minecraft à sauvegarder (sélectionnable dans un menu déroulant) |
 | `destination_path` | Non | `/media/multicraft_backups/` | Chemin local pour le fichier de sauvegarde |
 
 Le service déclenche des événements pour les automatisations :
@@ -345,9 +344,8 @@ automation:
         at: "04:00:00"
     action:
       - service: multicraft.download_backup
-        target:
-          device_id: "votre_device_id_ici"
         data:
+          device_id: "votre_device_id_ici"
           destination_path: "/media/multicraft_backups/"
 
   - alias: "Notification sauvegarde terminée"

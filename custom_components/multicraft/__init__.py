@@ -380,7 +380,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_DOWNLOAD_BACKUP_SCHEMA = vol.Schema({
             vol.Required("device_id"): cv.string,
             vol.Optional("destination_path", default="/media/multicraft_backups/"): cv.string,
-        })
+        }, extra=vol.ALLOW_EXTRA)
 
         async def handle_download_backup(call):
             """Handle the download_backup service call."""
