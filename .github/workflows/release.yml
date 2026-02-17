@@ -34,16 +34,16 @@ jobs:
           body: |
             ## Installation
 
-            ### HACS (Recommandé)
-            1. Ouvrez HACS dans Home Assistant
-            2. Recherchez "Multicraft"
-            3. Cliquez sur "Télécharger"
-            4. Redémarrez Home Assistant
+            ### HACS (Recommended / Recommandé)
+            1. Open HACS in Home Assistant / Ouvrez HACS dans Home Assistant
+            2. Search for "Multicraft" / Recherchez "Multicraft"
+            3. Click "Download" / Cliquez sur "Télécharger"
+            4. Restart Home Assistant / Redémarrez Home Assistant
 
-            ### Manuel
-            1. Téléchargez le fichier zip ci-dessous
-            2. Extrayez dans `config/custom_components/multicraft/`
-            3. Redémarrez Home Assistant
+            ### Manual / Manuel
+            1. Download the zip file below / Téléchargez le fichier zip ci-dessous
+            2. Extract to `config/custom_components/multicraft/` / Extrayez dans `config/custom_components/multicraft/`
+            3. Restart Home Assistant / Redémarrez Home Assistant
 
             ---
-            Voir le [CHANGELOG](https://github.com/fre69/homeassistant-multicraft/blob/main/CHANGELOG.md) pour les détails.
+            See the [CHANGELOG](https://github.com/fre69/homeassistant-multicraft/blob/main/CHANGELOG.md) for details. / Voir le [CHANGELOG](https://github.com/fre69/homeassistant-multicraft/blob/main/CHANGELOG.md) pour les détails.
