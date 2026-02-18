@@ -36,7 +36,11 @@
         "data": {
           "server_ids": "Servers",
           "scan_interval": "Scan interval",
-          "ftp_password": "FTP Password (for backup downloads)"
+          "ftp_password": "FTP Password (for backup downloads)",
+          "default_destination": "Default backup destination path",
+          "backup_rotation": "Rotate backup files (date-based rename before each backup)",
+          "backup_retention_days": "Backup retention (days, 0 = keep all)",
+          "keep_backup_on_server": "Keep backup on Minecraft server after download"
         }
       }
     }

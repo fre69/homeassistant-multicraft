@@ -15,8 +15,13 @@ This integration allows you to control your Minecraft servers managed by Multicr
   - Number of players online
   - Maximum players
   - Backup status (Idle/Running/Completed/Error)
-- **Button**: Trigger a server backup
+- **Button**: Trigger a server backup (with optional FTP download in background)
 - **Service**: `multicraft.download_backup` - Start a backup and download it via FTP
+- **Backup options** (configurable in integration settings):
+  - Backup file rotation with date-based filenames
+  - Automatic retention/cleanup of old backups (local + FTP)
+  - Option to delete backup from server after download
+  - Default destination path for backup downloads
 - UI-based configuration
 - Multilingual support (English/French)
 
@@ -49,6 +54,19 @@ You will need:
 - **API Key**: Your API key (generated in your Multicraft user profile)
 - **Server selection**: After connecting, you will choose which servers to monitor from a list
 - **FTP Password** (optional): Your Multicraft panel password, required for backup download functionality
+
+### Backup options
+
+After initial setup, you can configure backup behavior in the integration options (**Settings** > **Devices & Services** > **Multicraft** > **Configure**):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Default backup destination path** | *(empty)* | Local path where backups are saved. Fallback: `/media/multicraft_backups/` |
+| **Backup rotation** | Disabled | After each backup, rename files with a date suffix (e.g., `world_20260218_093124.zip`) on both local storage and FTP server |
+| **Backup retention (days)** | 7 | Automatically delete backups older than N days (local + FTP). Set to 0 to keep all |
+| **Keep backup on server** | Enabled | Keep the backup file on the Minecraft server after FTP download. Disable to auto-delete after download |
+
+> **Note**: Without an FTP password, the button and service will only trigger a server-side backup (no download, no rotation, no retention cleanup).
 
 ### Local configuration example
 
@@ -90,10 +108,16 @@ You can use these entities in your Home Assistant automations.
 
 The `multicraft.download_backup` service starts a server backup, waits for completion, and downloads the backup file via FTP. It uses device targeting, so you can pick your server from a dropdown in the visual automation editor.
 
+The button and the service share the same backup logic. The only difference is:
+- **Button**: runs in the background (non-blocking)
+- **Service**: runs synchronously (blocking), and can override the destination path
+
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `device_id` | Yes | - | The Minecraft server device to backup (selectable from dropdown) |
-| `destination_path` | No | `/media/multicraft_backups/` | Local path for the backup file |
+| `destination_path` | No | From integration settings | Local path for the backup file. Overrides the default destination configured in options |
+
+The service respects all backup options configured in the integration settings (rotation, retention, keep on server).
 
 The service fires events for automation triggers:
 - `multicraft_backup_completed` with `server_id` and `file` data
@@ -163,7 +187,7 @@ automation:
       - service: multicraft.download_backup
         data:
           device_id: "your_device_id_here"
-          destination_path: "/media/multicraft_backups/"
+          # destination_path is optional: uses the default from integration settings
 
   - alias: "Backup completion notification"
     trigger:
@@ -173,6 +197,25 @@ automation:
       - service: notify.mobile_app_your_phone
         data:
           message: "Minecraft backup completed: {{ trigger.event.data.file }}"
+```
+
+### Backup to a custom destination
+
+```yaml
+automation:
+  - alias: "Weekly backup to NAS"
+    trigger:
+      - platform: time
+        at: "03:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - sun
+    action:
+      - service: multicraft.download_backup
+        data:
+          device_id: "your_device_id_here"
+          destination_path: "/media/nas/minecraft_backups/"
 ```
 
 ## Support
@@ -198,8 +241,13 @@ Cette intégration permet de contrôler vos serveurs Minecraft gérés par Multi
   - Nombre de joueurs en ligne
   - Nombre maximum de joueurs
   - Statut de sauvegarde (Inactif/En cours/Terminé/Erreur)
-- **Bouton** : Déclencher une sauvegarde du serveur
+- **Bouton** : Déclencher une sauvegarde du serveur (avec téléchargement FTP en arrière-plan optionnel)
 - **Service** : `multicraft.download_backup` - Lancer une sauvegarde et la télécharger via FTP
+- **Options de sauvegarde** (configurables dans les paramètres de l'intégration) :
+  - Rotation des fichiers de sauvegarde avec noms basés sur la date
+  - Nettoyage automatique des anciennes sauvegardes (local + FTP)
+  - Option de suppression de la sauvegarde du serveur après téléchargement
+  - Chemin de destination par défaut pour les téléchargements
 - Configuration via l'interface utilisateur
 - Support multilingue (Français/Anglais)
 
@@ -232,6 +280,19 @@ Vous aurez besoin de :
 - **Clé API** : Votre clé API (générée dans le profil utilisateur de Multicraft)
 - **Sélection des serveurs** : Après connexion, vous choisirez les serveurs à surveiller dans une liste
 - **Mot de passe FTP** (optionnel) : Votre mot de passe du panel Multicraft, nécessaire pour le téléchargement des sauvegardes
+
+### Options de sauvegarde
+
+Après la configuration initiale, vous pouvez configurer le comportement des sauvegardes dans les options de l'intégration (**Paramètres** > **Appareils et services** > **Multicraft** > **Configurer**) :
+
+| Option | Défaut | Description |
+|--------|--------|-------------|
+| **Chemin de destination par défaut** | *(vide)* | Chemin local où les sauvegardes sont enregistrées. Fallback : `/media/multicraft_backups/` |
+| **Rotation des sauvegardes** | Désactivé | Après chaque sauvegarde, renomme les fichiers avec un suffixe date (ex : `world_20260218_093124.zip`) sur le stockage local et le serveur FTP |
+| **Conservation des sauvegardes (jours)** | 7 | Supprime automatiquement les sauvegardes de plus de N jours (local + FTP). Mettre à 0 pour tout garder |
+| **Conserver la sauvegarde sur le serveur** | Activé | Conserver le fichier de sauvegarde sur le serveur Minecraft après téléchargement FTP. Désactiver pour supprimer automatiquement après téléchargement |
+
+> **Note** : Sans mot de passe FTP, le bouton et le service déclenchent uniquement une sauvegarde côté serveur (pas de téléchargement, pas de rotation, pas de nettoyage de rétention).
 
 ### Exemple de configuration locale
 
@@ -273,10 +334,16 @@ Vous pouvez utiliser ces entités dans vos automatisations Home Assistant.
 
 Le service `multicraft.download_backup` lance une sauvegarde du serveur, attend la fin, et télécharge le fichier via FTP. Il utilise le ciblage par appareil, vous pouvez donc choisir votre serveur dans un menu déroulant dans l'éditeur visuel d'automatisation.
 
+Le bouton et le service partagent la même logique de sauvegarde. La seule différence :
+- **Bouton** : s'exécute en arrière-plan (non bloquant)
+- **Service** : s'exécute de manière synchrone (bloquant), et peut surcharger le chemin de destination
+
 | Paramètre | Requis | Défaut | Description |
 |-----------|--------|--------|-------------|
 | `device_id` | Oui | - | L'appareil du serveur Minecraft à sauvegarder (sélectionnable dans un menu déroulant) |
-| `destination_path` | Non | `/media/multicraft_backups/` | Chemin local pour le fichier de sauvegarde |
+| `destination_path` | Non | Depuis les paramètres de l'intégration | Chemin local pour le fichier de sauvegarde. Surcharge la destination par défaut configurée dans les options |
+
+Le service respecte toutes les options de sauvegarde configurées dans les paramètres de l'intégration (rotation, rétention, conservation sur le serveur).
 
 Le service déclenche des événements pour les automatisations :
 - `multicraft_backup_completed` avec les données `server_id` et `file`
@@ -346,7 +413,7 @@ automation:
       - service: multicraft.download_backup
         data:
           device_id: "votre_device_id_ici"
-          destination_path: "/media/multicraft_backups/"
+          # destination_path est optionnel : utilise le défaut des paramètres de l'intégration
 
   - alias: "Notification sauvegarde terminée"
     trigger:
@@ -356,6 +423,25 @@ automation:
       - service: notify.mobile_app_votre_telephone
         data:
           message: "Sauvegarde Minecraft terminée : {{ trigger.event.data.file }}"
+```
+
+### Sauvegarde vers une destination personnalisée
+
+```yaml
+automation:
+  - alias: "Sauvegarde hebdomadaire sur NAS"
+    trigger:
+      - platform: time
+        at: "03:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - sun
+    action:
+      - service: multicraft.download_backup
+        data:
+          device_id: "votre_device_id_ici"
+          destination_path: "/media/nas/sauvegardes_minecraft/"
 ```
 
 ## Support

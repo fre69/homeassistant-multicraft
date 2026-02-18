@@ -36,7 +36,11 @@
         "data": {
           "server_ids": "Serveurs",
           "scan_interval": "Intervalle de mise à jour",
-          "ftp_password": "Mot de passe FTP (pour le téléchargement des sauvegardes)"
+          "ftp_password": "Mot de passe FTP (pour le téléchargement des sauvegardes)",
+          "default_destination": "Chemin de destination par défaut des sauvegardes",
+          "backup_rotation": "Rotation des sauvegardes (renommage avec date avant chaque sauvegarde)",
+          "backup_retention_days": "Conservation des sauvegardes (jours, 0 = tout garder)",
+          "keep_backup_on_server": "Conserver la sauvegarde sur le serveur Minecraft après téléchargement"
         }
       }
     }

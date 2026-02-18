@@ -11,7 +11,12 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN, CONF_FTP_PASSWORD, CONF_DEFAULT_DESTINATION, CONF_BACKUP_ROTATION,
+    CONF_BACKUP_RETENTION_DAYS, CONF_KEEP_BACKUP_ON_SERVER,
+    DEFAULT_BACKUP_ROTATION, DEFAULT_BACKUP_RETENTION_DAYS, DEFAULT_KEEP_BACKUP_ON_SERVER,
+)
+from . import async_backup_and_download
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,17 +96,43 @@ class MulticraftBackupButton(CoordinatorEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Handle the button press - start a backup."""
-        try:
-            result = await self.api.start_server_backup(int(self._server_id))
-            if result.get("success"):
-                _LOGGER.info("Backup started for server %s (%s)", self._server_name, self._server_id)
-                # Add to active backup tracking
-                backup_active = self._hass.data[DOMAIN][self._entry_id].get("backup_active", set())
-                backup_active.add(self._server_id)
-                await self.coordinator.async_request_refresh()
-            else:
-                _LOGGER.error("Failed to start backup for server %s: %s", self._server_name, result.get("errors"))
-        except Exception as err:
-            _LOGGER.error("Error starting backup for server %s: %s", self._server_name, err)
-            raise
+        """Handle the button press - start a backup.
+
+        Uses the same async_backup_and_download code path as the download_backup service.
+        Runs in background since backup+download can take several minutes.
+        """
+        # Get config entry for options and FTP password
+        config_entry = None
+        for ce in self._hass.config_entries.async_entries(DOMAIN):
+            if ce.entry_id == self._entry_id:
+                config_entry = ce
+                break
+
+        ftp_password = config_entry.data.get(CONF_FTP_PASSWORD, "") if config_entry else ""
+        options = config_entry.options if config_entry else {}
+
+        rotation_enabled = options.get(CONF_BACKUP_ROTATION, DEFAULT_BACKUP_ROTATION)
+        retention_days = int(options.get(CONF_BACKUP_RETENTION_DAYS, DEFAULT_BACKUP_RETENTION_DAYS))
+        keep_on_server = options.get(CONF_KEEP_BACKUP_ON_SERVER, DEFAULT_KEEP_BACKUP_ON_SERVER)
+        destination = options.get(CONF_DEFAULT_DESTINATION, "") or "/media/multicraft_backups/"
+
+        backup_active = self._hass.data[DOMAIN][self._entry_id].get("backup_active", set())
+
+        async def _background_backup():
+            try:
+                await async_backup_and_download(
+                    self._hass, self.api, self._server_id, ftp_password,
+                    destination, rotation_enabled, retention_days,
+                    keep_on_server, backup_active, self.coordinator,
+                )
+            except Exception as err:
+                _LOGGER.error(
+                    "Background backup failed for server %s: %s",
+                    self._server_name, err,
+                )
+
+        self._hass.async_create_task(_background_backup())
+        _LOGGER.info(
+            "Backup started in background for server %s (%s)",
+            self._server_name, self._server_id,
+        )

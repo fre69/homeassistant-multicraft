@@ -9,7 +9,7 @@ from typing import Any
 
 import ftplib
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import voluptuous as vol
@@ -22,7 +22,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import MulticraftAPI
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL, CONF_SERVER_IDS, CONF_SERVER_ID, CONF_FTP_PASSWORD
+from .const import (
+    DOMAIN, DEFAULT_SCAN_INTERVAL, CONF_SERVER_IDS, CONF_SERVER_ID, CONF_FTP_PASSWORD,
+    CONF_DEFAULT_DESTINATION, CONF_BACKUP_ROTATION, CONF_BACKUP_RETENTION_DAYS,
+    CONF_KEEP_BACKUP_ON_SERVER, DEFAULT_BACKUP_ROTATION, DEFAULT_BACKUP_RETENTION_DAYS,
+    DEFAULT_KEEP_BACKUP_ON_SERVER,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +53,301 @@ def _extract_host_from_url(url: str) -> str:
 PLATFORMS = ["switch", "sensor", "button"]
 
 CONF_SCAN_INTERVAL = "scan_interval"
+
+
+def _ftp_rename(ftp_host: str, ftp_port: int, ftp_user: str,
+                ftp_password: str, remote_path: str, new_path: str) -> None:
+    """Rename a file on FTP server (runs in executor thread)."""
+    ftp = ftplib.FTP()
+    ftp.connect(ftp_host, ftp_port, timeout=30)
+    ftp.login(ftp_user, ftp_password)
+    try:
+        ftp.rename(remote_path, new_path)
+        _LOGGER.info("Renamed FTP file: %s -> %s", remote_path, new_path)
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            ftp.close()
+
+
+def _cleanup_old_backups_local(directory: str, retention_days: int) -> int:
+    """Delete .zip backup files older than retention_days in local directory (runs in executor)."""
+    if not os.path.isdir(directory):
+        return 0
+    cutoff = time.time() - (retention_days * 86400)
+    deleted = 0
+    for filename in os.listdir(directory):
+        if not filename.endswith(".zip"):
+            continue
+        filepath = os.path.join(directory, filename)
+        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
+            os.remove(filepath)
+            _LOGGER.info("Retention: deleted local backup %s", filepath)
+            deleted += 1
+    return deleted
+
+
+def _cleanup_old_backups_ftp(ftp_host: str, ftp_port: int, ftp_user: str,
+                             ftp_password: str, remote_dir: str,
+                             retention_days: int) -> int:
+    """Delete .zip backup files older than retention_days on FTP server (runs in executor)."""
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    ftp = ftplib.FTP()
+    ftp.connect(ftp_host, ftp_port, timeout=30)
+    ftp.login(ftp_user, ftp_password)
+    deleted = 0
+
+    try:
+        if remote_dir:
+            ftp.cwd(remote_dir)
+        files = ftp.nlst()
+        for filename in files:
+            if not filename.endswith(".zip"):
+                continue
+            try:
+                mdtm_response = ftp.sendcmd(f"MDTM {filename}")
+                timestamp_str = mdtm_response.split()[1]
+                file_dt = datetime.strptime(timestamp_str[:14], "%Y%m%d%H%M%S")
+                if file_dt < cutoff:
+                    ftp.delete(filename)
+                    _LOGGER.info("Retention: deleted FTP backup %s/%s", remote_dir, filename)
+                    deleted += 1
+            except Exception as err:
+                _LOGGER.debug("Could not check/delete FTP file %s: %s", filename, err)
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            ftp.close()
+
+    return deleted
+
+
+async def async_cleanup_old_backups(
+    hass: HomeAssistant,
+    ftp_host: str, ftp_port: int, ftp_user: str, ftp_password: str,
+    remote_dir: str, local_dir: str, retention_days: int,
+) -> None:
+    """Clean up old backups on both local storage and FTP server. Best effort."""
+    if retention_days <= 0:
+        return
+
+    try:
+        await hass.async_add_executor_job(
+            _cleanup_old_backups_local, local_dir, retention_days
+        )
+    except Exception as err:
+        _LOGGER.warning("Local backup cleanup failed: %s", err)
+
+    try:
+        await hass.async_add_executor_job(
+            _cleanup_old_backups_ftp, ftp_host, ftp_port, ftp_user,
+            ftp_password, remote_dir, retention_days
+        )
+    except Exception as err:
+        _LOGGER.warning("FTP backup cleanup failed: %s", err)
+
+
+async def async_backup_and_download(
+    hass: HomeAssistant,
+    api: "MulticraftAPI",
+    server_id: str,
+    ftp_password: str,
+    destination_path: str,
+    rotation_enabled: bool,
+    retention_days: int,
+    keep_on_server: bool,
+    backup_active_set: set,
+    coordinator: DataUpdateCoordinator,
+) -> str | None:
+    """Complete backup workflow: rotate, backup, poll, download, cleanup.
+
+    If ftp_password is empty, only triggers a server-side backup (no download).
+    Returns the local path of the downloaded backup file, or None if no download.
+    Raises HomeAssistantError on failure.
+    """
+    sid = int(server_id)
+    has_ftp = bool(ftp_password)
+
+    # Step 1: Start backup
+    try:
+        await api.start_server_backup(sid)
+    except Exception as err:
+        raise HomeAssistantError(f"Failed to start backup: {err}") from err
+
+    # Add to active set for coordinator polling
+    backup_active_set.add(server_id)
+
+    # Without FTP credentials, we can only trigger the backup server-side
+    if not has_ftp:
+        _LOGGER.info("Backup started for server %s (no FTP password, download skipped)", server_id)
+        await coordinator.async_request_refresh()
+        return None
+
+    # Step 2: Poll backup status every 5s, timeout 10 minutes
+    # Wait until we see "running" at least once, then wait until it finishes
+    # Tolerate transient connection errors (server may be under load during backup)
+    timeout = 600
+    start_time = time.time()
+    backup_file = None
+    ftp_address = None
+    seen_running = False
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+
+    while time.time() - start_time < timeout:
+        await asyncio.sleep(5)
+        try:
+            result = await api.get_server_backup_status(sid)
+            consecutive_errors = 0  # Reset on success
+            data = result.get("data", {})
+            status = data.get("status", "")
+
+            _LOGGER.debug(
+                "Backup poll for server %s: status=%s, file=%s, ftp=%s",
+                server_id, status, data.get("file", ""), data.get("ftp", ""),
+            )
+
+            if status == "running":
+                seen_running = True
+            elif seen_running:
+                # Was running, now finished
+                backup_file = data.get("file", "")
+                ftp_address = data.get("ftp", "")
+                break
+            # If not yet seen running, keep polling (backup may not have started yet)
+        except Exception as err:
+            consecutive_errors += 1
+            _LOGGER.warning(
+                "Error polling backup status for server %s (%d/%d): %s",
+                server_id, consecutive_errors, max_consecutive_errors, err,
+            )
+            if consecutive_errors >= max_consecutive_errors:
+                backup_active_set.discard(server_id)
+                raise HomeAssistantError(
+                    f"Backup polling failed after {max_consecutive_errors} consecutive errors: {err}"
+                ) from err
+            # Transient error, will retry on next iteration
+    else:
+        backup_active_set.discard(server_id)
+        raise HomeAssistantError("Backup timed out after 10 minutes")
+
+    # Remove from active set
+    backup_active_set.discard(server_id)
+
+    if not backup_file or not ftp_address:
+        raise HomeAssistantError("Backup completed but no file/FTP information returned")
+
+    _LOGGER.info(
+        "Backup complete for server %s, downloading: file=%s, ftp=%s",
+        server_id, backup_file, ftp_address,
+    )
+
+    # Step 3: Download via FTP
+    ftp_parts = ftp_address.split(":")
+    ftp_host = ftp_parts[0]
+    ftp_port = int(ftp_parts[1]) if len(ftp_parts) > 1 else 21
+    ftp_user = f"admin.{server_id}"
+
+    remote_filename = os.path.basename(backup_file)
+    remote_dir = backup_file.rsplit("/", 1)[0] if "/" in backup_file else ""
+
+    def ftp_download():
+        """Download file via FTP (runs in executor)."""
+        os.makedirs(destination_path, exist_ok=True)
+        local_file_path = os.path.join(destination_path, remote_filename)
+
+        ftp = ftplib.FTP()
+        ftp.connect(ftp_host, ftp_port, timeout=60)
+        ftp.login(ftp_user, ftp_password)
+
+        try:
+            # Log current directory and available files for debugging
+            cwd = ftp.pwd()
+            _LOGGER.debug("FTP connected, cwd=%s, downloading %s", cwd, backup_file)
+
+            with open(local_file_path, 'wb') as f:
+                ftp.retrbinary(f'RETR {backup_file}', f.write)
+        finally:
+            ftp.quit()
+
+        return local_file_path
+
+    try:
+        downloaded_path = await hass.async_add_executor_job(ftp_download)
+    except Exception as err:
+        hass.bus.async_fire("multicraft_backup_failed", {
+            "server_id": server_id,
+            "error": str(err),
+        })
+        raise HomeAssistantError(f"FTP download failed: {err}") from err
+
+    # Step 4: Rotation — rename downloaded file and FTP file with date suffix
+    if rotation_enabled:
+        date_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name_part, _, ext = remote_filename.rpartition(".")
+        if not name_part:
+            name_part = remote_filename
+            ext = ""
+        new_name = f"{name_part}_{date_suffix}.{ext}" if ext else f"{name_part}_{date_suffix}"
+
+        # Rename local file
+        new_local_path = os.path.join(destination_path, new_name)
+        try:
+            await hass.async_add_executor_job(os.rename, downloaded_path, new_local_path)
+            _LOGGER.info("Rotated local backup: %s -> %s", remote_filename, new_name)
+            downloaded_path = new_local_path
+        except Exception as err:
+            _LOGGER.warning("Failed to rename local backup: %s", err)
+
+        # Rename on FTP (only if keeping on server)
+        if keep_on_server:
+            new_remote = f"{remote_dir}/{new_name}" if remote_dir else new_name
+            try:
+                await hass.async_add_executor_job(
+                    _ftp_rename, ftp_host, ftp_port, ftp_user, ftp_password,
+                    backup_file, new_remote,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to rename backup on FTP: %s", err)
+
+    # Step 5: Delete backup from server if requested
+    if not keep_on_server:
+        try:
+            def ftp_delete():
+                ftp = ftplib.FTP()
+                ftp.connect(ftp_host, ftp_port, timeout=30)
+                ftp.login(ftp_user, ftp_password)
+                try:
+                    ftp.delete(backup_file)
+                    _LOGGER.info("Deleted backup from server: %s", backup_file)
+                finally:
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        ftp.close()
+
+            await hass.async_add_executor_job(ftp_delete)
+        except Exception as err:
+            _LOGGER.warning("Failed to delete backup from server: %s", err)
+
+    # Step 6: Cleanup old backups (retention)
+    await async_cleanup_old_backups(
+        hass, ftp_host, ftp_port, ftp_user, ftp_password,
+        remote_dir, destination_path, retention_days,
+    )
+
+    # Fire success event
+    hass.bus.async_fire("multicraft_backup_completed", {
+        "server_id": server_id,
+        "file": downloaded_path,
+    })
+
+    # Refresh coordinator
+    await coordinator.async_request_refresh()
+
+    return downloaded_path
 
 
 async def async_ping_minecraft_server(host: str, port: int, timeout: float = 5.0) -> dict[str, Any]:
@@ -379,13 +679,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         SERVICE_DOWNLOAD_BACKUP_SCHEMA = vol.Schema({
             vol.Required("device_id"): cv.string,
-            vol.Optional("destination_path", default="/media/multicraft_backups/"): cv.string,
+            vol.Optional("destination_path"): cv.string,
         }, extra=vol.ALLOW_EXTRA)
 
         async def handle_download_backup(call):
             """Handle the download_backup service call."""
-            destination_path = call.data.get("destination_path", "/media/multicraft_backups/")
-
             # Resolve device_id to server_id and entry_id
             device_id = call.data.get("device_id")
             if not device_id:
@@ -433,94 +731,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if target_config_entry:
                 ftp_password = target_config_entry.data.get(CONF_FTP_PASSWORD, "")
 
-            if not ftp_password:
-                raise HomeAssistantError(
-                    "FTP password not configured. Please reconfigure the integration to add the FTP password."
-                )
+            # Get backup options from config entry
+            options = target_config_entry.options if target_config_entry else {}
+            default_destination = options.get(CONF_DEFAULT_DESTINATION, "")
+            rotation_enabled = options.get(CONF_BACKUP_ROTATION, DEFAULT_BACKUP_ROTATION)
+            retention_days = int(options.get(CONF_BACKUP_RETENTION_DAYS, DEFAULT_BACKUP_RETENTION_DAYS))
+            keep_on_server = options.get(CONF_KEEP_BACKUP_ON_SERVER, DEFAULT_KEEP_BACKUP_ON_SERVER)
 
-            # Step 1: Start backup
-            try:
-                await api_instance.start_server_backup(int(server_id))
-            except Exception as err:
-                raise HomeAssistantError(f"Failed to start backup: {err}") from err
+            # Service can override destination via call data
+            destination_path = call.data.get("destination_path") or default_destination
+            if not destination_path:
+                destination_path = "/media/multicraft_backups/"
 
-            # Add to active set for coordinator polling
-            target_entry_data.get("backup_active", set()).add(server_id)
+            backup_active = target_entry_data.get("backup_active", set())
 
-            # Step 2: Poll backup status every 5s, timeout 10 minutes
-            timeout = 600
-            start_time = time.time()
-            backup_file = None
-            ftp_address = None
-
-            while time.time() - start_time < timeout:
-                await asyncio.sleep(5)
-                try:
-                    result = await api_instance.get_server_backup_status(int(server_id))
-                    data = result.get("data", {})
-                    status = data.get("status", "")
-
-                    if status != "running":
-                        backup_file = data.get("file", "")
-                        ftp_address = data.get("ftp", "")
-                        break
-                except Exception as err:
-                    _LOGGER.error("Error polling backup status: %s", err)
-                    target_entry_data.get("backup_active", set()).discard(server_id)
-                    raise HomeAssistantError(f"Error polling backup status: {err}") from err
-            else:
-                target_entry_data.get("backup_active", set()).discard(server_id)
-                raise HomeAssistantError("Backup timed out after 10 minutes")
-
-            # Remove from active set
-            target_entry_data.get("backup_active", set()).discard(server_id)
-
-            if not backup_file or not ftp_address:
-                raise HomeAssistantError("Backup completed but no file/FTP information returned")
-
-            # Step 3: Download via FTP
-            # Parse FTP address (format: "host:port")
-            ftp_parts = ftp_address.split(":")
-            ftp_host = ftp_parts[0]
-            ftp_port = int(ftp_parts[1]) if len(ftp_parts) > 1 else 21
-            ftp_user = f"admin.{server_id}"
-
-            remote_filename = os.path.basename(backup_file)
-
-            def ftp_download():
-                """Download file via FTP (runs in executor)."""
-                os.makedirs(destination_path, exist_ok=True)
-                local_file_path = os.path.join(destination_path, remote_filename)
-
-                ftp = ftplib.FTP()
-                ftp.connect(ftp_host, ftp_port, timeout=60)
-                ftp.login(ftp_user, ftp_password)
-
-                try:
-                    with open(local_file_path, 'wb') as f:
-                        ftp.retrbinary(f'RETR {backup_file}', f.write)
-                finally:
-                    ftp.quit()
-
-                return local_file_path
-
-            try:
-                downloaded_path = await hass.async_add_executor_job(ftp_download)
-            except Exception as err:
-                hass.bus.async_fire("multicraft_backup_failed", {
-                    "server_id": server_id,
-                    "error": str(err),
-                })
-                raise HomeAssistantError(f"FTP download failed: {err}") from err
-
-            # Fire success event
-            hass.bus.async_fire("multicraft_backup_completed", {
-                "server_id": server_id,
-                "file": downloaded_path,
-            })
-
-            # Refresh coordinator
-            await coordinator_instance.async_request_refresh()
+            await async_backup_and_download(
+                hass, api_instance, server_id, ftp_password, destination_path,
+                rotation_enabled, retention_days, keep_on_server,
+                backup_active, coordinator_instance,
+            )
 
         hass.services.async_register(
             DOMAIN,

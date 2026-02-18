@@ -11,6 +11,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -23,7 +24,13 @@ from homeassistant.helpers.selector import (
 )
 
 from .api import MulticraftAPI
-from .const import DOMAIN, CONF_API_URL, CONF_USERNAME, CONF_API_KEY, CONF_SERVER_IDS, DEFAULT_SCAN_INTERVAL, CONF_FTP_PASSWORD
+from .const import (
+    DOMAIN, CONF_API_URL, CONF_USERNAME, CONF_API_KEY, CONF_SERVER_IDS,
+    DEFAULT_SCAN_INTERVAL, CONF_FTP_PASSWORD,
+    CONF_DEFAULT_DESTINATION, CONF_BACKUP_ROTATION, CONF_BACKUP_RETENTION_DAYS,
+    CONF_KEEP_BACKUP_ON_SERVER, DEFAULT_BACKUP_ROTATION, DEFAULT_BACKUP_RETENTION_DAYS,
+    DEFAULT_KEEP_BACKUP_ON_SERVER,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -185,6 +192,18 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
         )
         current_ftp_password = self.config_entry.data.get(CONF_FTP_PASSWORD, "")
+        current_default_destination = self.config_entry.options.get(
+            CONF_DEFAULT_DESTINATION, ""
+        )
+        current_backup_rotation = self.config_entry.options.get(
+            CONF_BACKUP_ROTATION, DEFAULT_BACKUP_ROTATION
+        )
+        current_retention_days = self.config_entry.options.get(
+            CONF_BACKUP_RETENTION_DAYS, DEFAULT_BACKUP_RETENTION_DAYS
+        )
+        current_keep_on_server = self.config_entry.options.get(
+            CONF_KEEP_BACKUP_ON_SERVER, DEFAULT_KEEP_BACKUP_ON_SERVER
+        )
 
         try:
 
@@ -265,7 +284,21 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
 
                 return self.async_create_entry(
                     title="",
-                    data={CONF_SCAN_INTERVAL: scan_interval},
+                    data={
+                        CONF_SCAN_INTERVAL: scan_interval,
+                        CONF_DEFAULT_DESTINATION: user_input.get(
+                            CONF_DEFAULT_DESTINATION, current_default_destination
+                        ),
+                        CONF_BACKUP_ROTATION: user_input.get(
+                            CONF_BACKUP_ROTATION, current_backup_rotation
+                        ),
+                        CONF_BACKUP_RETENTION_DAYS: int(user_input.get(
+                            CONF_BACKUP_RETENTION_DAYS, current_retention_days
+                        )),
+                        CONF_KEEP_BACKUP_ON_SERVER: user_input.get(
+                            CONF_KEEP_BACKUP_ON_SERVER, current_keep_on_server
+                        ),
+                    },
                 )
 
         server_options = [
@@ -276,7 +309,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
             for server in self._servers
         ]
 
-        # Build schema based on whether we have server options
+        # Build common fields for both schema variants
         ftp_password_field = {
             vol.Optional(
                 CONF_FTP_PASSWORD, default=current_ftp_password
@@ -285,6 +318,29 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
                     type=TextSelectorType.PASSWORD,
                 )
             ),
+        }
+
+        backup_fields = {
+            vol.Optional(
+                CONF_DEFAULT_DESTINATION, default=current_default_destination
+            ): TextSelector(TextSelectorConfig()),
+            vol.Optional(
+                CONF_BACKUP_ROTATION, default=current_backup_rotation
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_BACKUP_RETENTION_DAYS, default=current_retention_days
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=365,
+                    step=1,
+                    mode=NumberSelectorMode.SLIDER,
+                    unit_of_measurement="jours",
+                )
+            ),
+            vol.Optional(
+                CONF_KEEP_BACKUP_ON_SERVER, default=current_keep_on_server
+            ): BooleanSelector(),
         }
 
         if server_options:
@@ -311,6 +367,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
                         )
                     ),
                     **ftp_password_field,
+                    **backup_fields,
                 }
             )
         else:
@@ -329,6 +386,7 @@ class MulticraftOptionsFlowHandler(config_entries.OptionsFlow):
                         )
                     ),
                     **ftp_password_field,
+                    **backup_fields,
                 }
             )
 
