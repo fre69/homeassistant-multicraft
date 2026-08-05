@@ -14,6 +14,9 @@ build/
 *.log
 
 # IDE
+# Exception assumee a la regle "on versionne toujours .vscode/" : depot PUBLIC
+# destine a HACS, et ce .vscode/ ne contient que la couleur d'identification de
+# fenetre - inutile de l'imposer a qui clone. (HACS n'interdit rien ici.)
 .vscode/
 .idea/
 *.swp
